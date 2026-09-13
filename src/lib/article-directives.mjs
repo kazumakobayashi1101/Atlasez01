@@ -66,28 +66,35 @@ const escapeHtml = (value) =>
   );
 
 /**
- * Directive titles may contain inline mathematics. Keeping the title as
- * MDAST nodes lets remark-math and the existing MathJax pipeline process it
- * just like the rest of an article.
+ * Directive titles may contain inline mathematics and explicit emphasis.
+ * Keeping the title as MDAST nodes lets remark-math/rehype-mathjax process it
+ * just like the rest of an article. Plain titles intentionally remain plain;
+ * only authored `**...**` is rendered bold.
  */
 const titleNodes = (value) => {
   const nodes = [];
   const source = String(value ?? "");
-  const pattern = /\$([^$\r\n]+)\$/g;
+  const pattern = /(\*\*[^*\r\n]+?\*\*|\$[^$\r\n]+\$)/g;
   let cursor = 0;
   for (const match of source.matchAll(pattern)) {
     const start = match.index ?? 0;
     if (start > cursor)
       nodes.push({ type: "text", value: source.slice(cursor, start) });
-    nodes.push({
-      type: "inlineMath",
-      value: match[1],
-      data: {
-        hName: "code",
-        hProperties: { className: ["language-math", "math-inline"] },
-        hChildren: [{ type: "text", value: match[1] }],
-      },
-    });
+    const token = match[0];
+    if (token.startsWith("**")) {
+      nodes.push({ type: "strong", children: titleNodes(token.slice(2, -2)) });
+    } else {
+      const value = token.slice(1, -1);
+      nodes.push({
+        type: "inlineMath",
+        value,
+        data: {
+          hName: "code",
+          hProperties: { className: ["language-math", "math-inline"] },
+          hChildren: [{ type: "text", value }],
+        },
+      });
+    }
     cursor = start + match[0].length;
   }
   if (cursor < source.length)
@@ -146,20 +153,79 @@ export function isArticleDirectiveClose(value, minimumLength = 3) {
   return Boolean(match && match[1].length >= minimumLength);
 }
 
+/**
+ * Preserve ordered-list numbering when an unindented display-math block
+ * splits one logical list. CommonMark must emit two `<ol>` blocks at that
+ * boundary; carrying the continuation start keeps the published article's
+ * visible numbering contiguous instead of resetting to 1.
+ */
+export function remarkArticleOrderedListContinuation() {
+  return (tree) => {
+    const visit = (parent) => {
+      if (!parent || !Array.isArray(parent.children)) return;
+      let previousList = null;
+      let separatedByDisplayMath = false;
+      for (const child of parent.children) {
+        if (child?.type === "list" && child.ordered) {
+          if (
+            previousList &&
+            separatedByDisplayMath &&
+            (child.start == null || child.start === 1)
+          ) {
+            const previousStart = Number(previousList.start ?? 1);
+            child.start = previousStart + previousList.children.length;
+          }
+          visit(child);
+          previousList = child;
+          separatedByDisplayMath = false;
+          continue;
+        }
+        if (child?.type === "math") {
+          if (previousList) separatedByDisplayMath = true;
+          continue;
+        }
+        previousList = null;
+        separatedByDisplayMath = false;
+        visit(child);
+      }
+    };
+    visit(tree);
+  };
+}
+
+const inlineSource = (node) => {
+  if (!node) return "";
+  if (node.type === "text") return node.value;
+  if (node.type === "inlineMath") return `$${node.value}$`;
+  const children = (node.children ?? []).map(inlineSource).join("");
+  if (node.type === "strong") return `**${children}**`;
+  if (node.type === "emphasis") return `*${children}*`;
+  if (node.type === "delete") return `~~${children}~~`;
+  if (node.type === "inlineCode") return `\`${node.value}\``;
+  if (node.type === "break") return "\n";
+  return children;
+};
+
 const paragraphText = (node) => {
   if (!node || node.type !== "paragraph" || !Array.isArray(node.children))
     return null;
-  if (
-    !node.children.every(
-      (child) => child.type === "text" || child.type === "inlineMath",
-    )
-  )
-    return null;
-  return node.children
-    .map((child) =>
-      child.type === "inlineMath" ? `$${child.value}$` : child.value,
-    )
-    .join("");
+  const supported = new Set([
+    "text",
+    "inlineMath",
+    "strong",
+    "emphasis",
+    "delete",
+    "inlineCode",
+    "break",
+  ]);
+  const containsUnsupported = (children) =>
+    children.some(
+      (child) =>
+        !supported.has(child.type) ||
+        (child.children && containsUnsupported(child.children)),
+    );
+  if (containsUnsupported(node.children)) return null;
+  return node.children.map(inlineSource).join("");
 };
 
 const compactDirective = (value) => {

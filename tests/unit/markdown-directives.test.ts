@@ -3,9 +3,13 @@ import { unified } from "unified";
 import remarkDirective from "remark-directive";
 import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
+import remarkRehype from "remark-rehype";
+import rehypeRaw from "rehype-raw";
+import rehypeStringify from "rehype-stringify";
 import {
   parseArticleDirectiveMarker,
   remarkArticleDirectives,
+  remarkArticleOrderedListContinuation,
 } from "../../src/lib/article-directives.mjs";
 
 type TestNode = {
@@ -29,6 +33,19 @@ const parse = async (source: string) => {
     .use(remarkMath)
     .use(remarkArticleDirectives);
   return processor.run(processor.parse(source), { value: source });
+};
+
+const render = async (source: string) => {
+  const processor = unified()
+    .use(remarkParse)
+    .use(remarkMath)
+    .use(remarkDirective)
+    .use(remarkArticleOrderedListContinuation)
+    .use(remarkArticleDirectives)
+    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(rehypeRaw)
+    .use(rehypeStringify, { allowDangerousHtml: true });
+  return String(await processor.process(source));
 };
 
 const plainText = (node: unknown): string => {
@@ -156,5 +173,42 @@ describe("math article directives", () => {
       title: "系 $G$",
       id: "cor-id",
     });
+  });
+
+  it("keeps ordered-list numbering across a display-math block", async () => {
+    const html = await render(
+      [
+        "1. 最初の項目",
+        "2. 次の項目",
+        "",
+        "$$",
+        "x = y",
+        "$$",
+        "",
+        "1. 数式の後の項目",
+      ].join("\n"),
+    );
+    expect(html).toContain('<ol start="3">');
+    expect(html).toContain("<li>数式の後の項目</li>");
+  });
+
+  it("keeps explicit folding-title emphasis while leaving plain titles unbold", async () => {
+    const html = await render(
+      [
+        ":::folding **重要な補足**",
+        "",
+        "本文",
+        "",
+        ":::",
+        "",
+        ":::folding 通常の補足",
+        "",
+        "本文",
+        "",
+        ":::",
+      ].join("\n"),
+    );
+    expect(html).toContain("<summary><strong>重要な補足</strong></summary>");
+    expect(html).toContain("<summary>通常の補足</summary>");
   });
 });

@@ -6,7 +6,10 @@ import remarkDirective from "remark-directive";
 import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
 import rehypeMathjax from "rehype-mathjax/svg";
-import { remarkArticleDirectives } from "./src/lib/article-directives.mjs";
+import {
+  remarkArticleDirectives,
+  remarkArticleOrderedListContinuation,
+} from "./src/lib/article-directives.mjs";
 import { renderArticleTikz } from "./src/lib/markdown-tikz.mjs";
 
 /**
@@ -268,6 +271,7 @@ export default defineConfig({
     processor: unified({
       remarkPlugins: [
         remarkMath,
+        remarkArticleOrderedListContinuation,
         remarkDirective,
         remarkArticleDirectives,
         renderArticleTikz,
